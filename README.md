@@ -83,9 +83,46 @@ All application routes use the `/api/v1` prefix.
 
 Guest session IDs are random UUIDs stored in the browser's local storage. Accusations cannot be submitted twice.
 
-## Production deployment
+## Production deployment (Vercel + Render + MongoDB Atlas)
 
-Build the frontend with `npm run build` and deploy the generated `dist/` directory to a static host. Deploy the Express API to a Node.js host. Configure `MONGODB_URI`, `GEMINI_API_KEY`, `GEMINI_MODEL`, and `CLIENT_ORIGIN` in the API host's environment. Set `CLIENT_ORIGIN` to the deployed frontend origin.
+The repository includes `vercel.json` for client-side route refreshes and `render.yaml` for the API service.
+
+### 1. Set up MongoDB Atlas
+
+Create a cluster and a database user, then copy the application's MongoDB connection string. Configure Atlas network access so the Render service can reach the cluster. Put the connection string in Render as `MONGODB_URI`; do not commit it to the repository.
+
+### 2. Deploy the API to Render
+
+Create a Render Blueprint from this repository and use the included `render.yaml`, or create a Node web service manually with:
+
+- Build command: `npm install`
+- Start command: `npm start`
+- Health check path: `/api/health`
+
+Set these environment variables for the API service:
+
+| Variable | Value |
+| --- | --- |
+| `MONGODB_URI` | Your Atlas connection string |
+| `GEMINI_API_KEY` | Your Gemini API key |
+| `GEMINI_MODEL` | `gemini-2.5-flash` or another supported model |
+| `CLIENT_ORIGINS` | The Vercel site origin, such as `https://your-app.vercel.app` |
+
+`CLIENT_ORIGINS` accepts a comma-separated list if you use more than one frontend origin. The API listens on Render's `PORT` environment variable.
+
+### 3. Deploy the frontend to Vercel
+
+Import this repository into Vercel. Use the repository root as the project root and `npm run build` as the build command. Add this environment variable in the Vercel project settings:
+
+| Variable | Value |
+| --- | --- |
+| `VITE_API_BASE_URL` | The Render API origin, such as `https://ai-mystery-room-api.onrender.com` |
+
+The frontend adds `/api/v1` to this origin. Set the variable for the Production environment (and Preview if needed), then redeploy after changing it. Add the exact deployed Vercel origin to Render's `CLIENT_ORIGINS` and redeploy the API.
+
+The Gemini key and MongoDB URI belong only in Render's environment settings. Never put either in a `VITE_` variable, since Vite embeds those variables in client code.
+
+The Vercel SPA rewrite is configured in `vercel.json`; it lets direct visits and page refreshes on `/case/:id` return the React application.
 
 ## Project structure
 

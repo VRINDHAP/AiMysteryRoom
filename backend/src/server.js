@@ -10,7 +10,9 @@ import { generateSchema, sessionPatchSchema, accusationSchema } from './validato
 import { generateMystery } from './services/generateMystery.js';
 
 const app = express();
-app.use(cors({ origin: process.env.CLIENT_ORIGIN || 'http://localhost:5173' }));
+app.set('trust proxy', 1);
+const allowedOrigins = (process.env.CLIENT_ORIGINS || process.env.CLIENT_ORIGIN || 'http://localhost:5173').split(',').map(origin => origin.trim()).filter(Boolean);
+app.use(cors({ origin(origin, callback) { if (!origin || allowedOrigins.includes(origin)) return callback(null, true); return callback(new Error('Origin is not allowed by CORS.')); } }));
 app.use(express.json({ limit: '32kb' }));
 const api = express.Router();
 const generationLimit = rateLimit({ windowMs: 60 * 60 * 1000, limit: 8, standardHeaders: 'draft-7', legacyHeaders: false, message: { success:false, message:'Generation limit reached. Please try again later.' } });
@@ -36,5 +38,10 @@ app.use('/api/v1',api);
 app.get('/api/health',(_req,res)=>res.json({success:true,status:'ok'}));
 app.use((err,_req,res,_next)=>{ console.error(err); res.status(err.status||500).json({success:false,message:err.status?err.message:'Something went wrong. Please try again.'}); });
 const port=Number(process.env.PORT)||4000;
-if(process.env.MONGODB_URI) mongoose.connect(process.env.MONGODB_URI).then(()=>app.listen(port,()=>console.log(`AI Mystery Room API listening on ${port}`))).catch(error=>{console.error('MongoDB connection failed:',error.message);process.exit(1);});
-else app.listen(port,()=>console.log(`AI Mystery Room API listening on ${port} (database not configured)`));
+if (!process.env.MONGODB_URI) {
+  console.error('MONGODB_URI is required. Add it to the server environment before starting the API.');
+  process.exit(1);
+}
+mongoose.connect(process.env.MONGODB_URI, { serverSelectionTimeoutMS: 10000 })
+  .then(() => app.listen(port, () => console.log(`AI Mystery Room API listening on ${port}`)))
+  .catch(error => { console.error('MongoDB connection failed:', error.message); process.exit(1); });
