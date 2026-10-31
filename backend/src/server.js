@@ -1,0 +1,40 @@
+import 'dotenv/config';
+import express from 'express';
+import cors from 'cors';
+import mongoose from 'mongoose';
+import { rateLimit } from 'express-rate-limit';
+import { randomUUID } from 'node:crypto';
+import Mystery from './models/Mystery.js';
+import Session from './models/Session.js';
+import { generateSchema, sessionPatchSchema, accusationSchema } from './validators/schemas.js';
+import { generateMystery } from './services/generateMystery.js';
+
+const app = express();
+app.use(cors({ origin: process.env.CLIENT_ORIGIN || 'http://localhost:5173' }));
+app.use(express.json({ limit: '32kb' }));
+const api = express.Router();
+const generationLimit = rateLimit({ windowMs: 60 * 60 * 1000, limit: 8, standardHeaders: 'draft-7', legacyHeaders: false, message: { success:false, message:'Generation limit reached. Please try again later.' } });
+const asyncRoute = fn => (req,res,next) => Promise.resolve(fn(req,res,next)).catch(next);
+const publicCase = m => ({ id: m._id.toString(), ...m.publicCase, crime: { victim: m.publicCase.crime.victim, location: m.publicCase.crime.location } });
+
+api.post('/mysteries/generate', generationLimit, asyncRoute(async (req,res) => {
+  const input = generateSchema.safeParse(req.body);
+  if (!input.success) return res.status(400).json({ success:false, message:input.error.issues[0]?.message || 'Please check the case details.' });
+  const data = await generateMystery(input.data);
+  const { solution, culprit, ...publicData } = data;
+  const m = await Mystery.create({ publicCase: publicData, solution, culpritId: culprit.suspectId, originalScenario: input.data.scenario });
+  const sessionId = randomUUID();
+  await Session.create({ sessionId, mysteryId:m._id });
+  res.status(201).json({ success:true, mysteryId:m._id.toString(), sessionId, case:publicCase(m) });
+}));
+api.get('/mysteries/:id', asyncRoute(async(req,res) => { const m=await Mystery.findById(req.params.id); if(!m)return res.status(404).json({success:false,message:'Case not found.'}); res.json({success:true,case:publicCase(m)}); }));
+api.get('/mysteries/:id/evidence', asyncRoute(async(req,res) => { const m=await Mystery.findById(req.params.id); if(!m)return res.status(404).json({success:false,message:'Case not found.'}); let list=m.publicCase.evidence; if(req.query.category)list=list.filter(e=>e.category===req.query.category); if(req.query.type)list=list.filter(e=>e.type===req.query.type); if(req.query.suspectId)list=list.filter(e=>e.associatedSuspectIds.includes(req.query.suspectId)); res.json({success:true,evidence:list}); }));
+api.patch('/sessions/:sessionId', asyncRoute(async(req,res) => { const parsed=sessionPatchSchema.safeParse(req.body); if(!parsed.success)return res.status(400).json({success:false,message:'Invalid progress update.'}); const { mysteryId,...update }=parsed.data; const session=await Session.findOne({sessionId:req.params.sessionId,mysteryId}); if(!session)return res.status(404).json({success:false,message:'Investigation session not found.'}); if(session.isSubmitted)return res.status(409).json({success:false,message:'This investigation is already complete.'}); Object.assign(session,update); await session.save(); res.json({success:true}); }));
+api.post('/mysteries/:id/accusation', asyncRoute(async(req,res) => { const parsed=accusationSchema.safeParse(req.body); if(!parsed.success)return res.status(400).json({success:false,message:'Select a suspect before submitting.'}); const m=await Mystery.findById(req.params.id); if(!m)return res.status(404).json({success:false,message:'Case not found.'}); const s=await Session.findOne({sessionId:parsed.data.sessionId,mysteryId:m._id}); if(!s)return res.status(404).json({success:false,message:'Investigation session not found.'}); if(s.isSubmitted)return res.status(409).json({success:false,message:'An accusation has already been submitted.'}); if(!m.publicCase.suspects.some(p=>p.id===parsed.data.selectedSuspectId))return res.status(400).json({success:false,message:'That suspect is not part of this case.'}); s.selectedSuspectId=parsed.data.selectedSuspectId; s.accusationReason=parsed.data.reason; s.isSubmitted=true; s.result={correct:s.selectedSuspectId===m.culpritId,selectedSuspectId:s.selectedSuspectId,culpritId:m.culpritId,culprit:m.publicCase.suspects.find(p=>p.id===m.culpritId),solution:m.solution,crime:m.publicCase.crime}; await s.save(); res.json({success:true,correct:s.result.correct,result:s.result}); }));
+api.get('/mysteries/:id/result/:sessionId', asyncRoute(async(req,res) => { const s=await Session.findOne({sessionId:req.params.sessionId,mysteryId:req.params.id}); if(!s)return res.status(404).json({success:false,message:'Investigation session not found.'}); if(!s.isSubmitted)return res.status(403).json({success:false,message:'Submit your accusation to reveal the solution.'}); res.json({success:true,result:s.result}); }));
+app.use('/api/v1',api);
+app.get('/api/health',(_req,res)=>res.json({success:true,status:'ok'}));
+app.use((err,_req,res,_next)=>{ console.error(err); res.status(err.status||500).json({success:false,message:err.status?err.message:'Something went wrong. Please try again.'}); });
+const port=Number(process.env.PORT)||4000;
+if(process.env.MONGODB_URI) mongoose.connect(process.env.MONGODB_URI).then(()=>app.listen(port,()=>console.log(`AI Mystery Room API listening on ${port}`))).catch(error=>{console.error('MongoDB connection failed:',error.message);process.exit(1);});
+else app.listen(port,()=>console.log(`AI Mystery Room API listening on ${port} (database not configured)`));

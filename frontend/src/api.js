@@ -1,0 +1,3 @@
+const BASE='/api/v1';
+async function request(path,options={}) { const response=await fetch(BASE+path,{...options,headers:{'Content-Type':'application/json',...options.headers}}); const data=await response.json().catch(()=>({})); if(!response.ok)throw new Error(data.message||'Something went wrong.'); return data; }
+export const api={ generate:body=>request('/mysteries/generate',{method:'POST',body:JSON.stringify(body)}), getCase:id=>request(`/mysteries/${id}`), patchSession:(id,body)=>request(`/sessions/${id}`,{method:'PATCH',body:JSON.stringify(body)}), accuse:(id,body)=>request(`/mysteries/${id}/accusation`,{method:'POST',body:JSON.stringify(body)}) };
